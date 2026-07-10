@@ -1,0 +1,3 @@
+# Mercer University
+user-agent: *
+disallow: /
