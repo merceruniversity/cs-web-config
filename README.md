@@ -3,12 +3,23 @@
 This is the IIS configuration file used by the CommonSpot servers: both Authoring and ROPS
 (Read-Only Production Servers). It should be present in the IIS root of all CommonSpot servers:
 
-- GeorgeLucas (Development Authoring)
-- HanSolo (ROD)
-- LukeSkywalker (ROD)
 - GeneRoddenberry (Production Authoring)
 - CaptainKirk (ROP)
 - MisterSpock (ROP)
+- ~~GeorgeLucas (Development Authoring)~~ *defunct — see below*
+- ~~HanSolo (ROD)~~ *defunct*
+- ~~LukeSkywalker (ROD)~~ *defunct*
+
+**This is the deprecated, legacy CMS platform Mercer is moving off of.** Nothing of vital
+importance is still hosted here — the surviving live content (e.g. `cla.mercer.edu/faculty-staff/`)
+is legacy/long-tail, not business-critical. Treat this repo as maintenance-mode: keep it working
+well enough to redirect people to where content actually lives now, don't invest in it beyond that.
+
+**There is no dev/staging environment anymore** — the licenses for the non-production CommonSpot
+servers (GeorgeLucas, HanSolo, LukeSkywalker) lapsed and those hosts deauthenticated. Changes to
+this `web.config` go straight to production with no way to test first. Review changes extra
+carefully before pushing, deploy to **both** ROPs (CaptainKirk and MisterSpock), and verify
+behavior live immediately after deploying — with `curl -sI`, not a browser (see Notes).
 
 **IIS Manager does not move comments with rules — reorder `web.config` manually if you edit it in
 IIS Manager rather than by hand.**
@@ -26,22 +37,44 @@ IIS Manager rather than by hand.**
 
 ## Notes (2026-07-10)
 
-- Retired the ~30 fine-grained per-department `cla.mercer.edu` redirect rules (in place ~6 years,
-  well past this site's ~6-month redirect SLA). Replaced with two rules: leave
-  `cla.mercer.edu/faculty-staff/` alone (still actually served from that host), redirect
-  everything else on `cla.mercer.edu` to the `liberalarts.mercer.edu` homepage.
-  - The faculty-staff match accounts for the `www/` prefix that IIS's own file-existence
-    fallback rules may already have prepended to `{URL}` by the time this rule runs — routing is
-    entirely IIS's job here, not CommonSpot's.
-- `cla.mercer.edu` robots.txt handling stays folded into the single shared "Rewrite robots.txt
-  Disallow" rule (alongside dev/author hosts) rather than split into its own rule — robots.txt is
-  one file per host, not per-path, so there's no way to disallow just `/faculty-staff/` there;
-  that would require a `Disallow` line inside the file's own content instead.
-- Removed unused `rewriteMap`s (`SSL1 Prefix to Domain`, `Domain to SSL1 Prefix`,
-  `HTTPS Server Variable Value to s`) that weren't referenced anywhere in the rules.
-- Open question, not yet acted on: `robots-allow.txt` disallows most of the same CMS-internal
-  paths that `web.config`'s "Stop Processing for In-Site CMS Resources" rule treats as
-  internal-only (`_cs_apps`, `_cs_upload`, `_cs_xmlpub`, `adf`, `cfdocs`, `cfide`, `commonspot`),
-  but is missing `/jakarta/` — unclear what that path is/was for, needs confirming before adding.
-  `_cs_resources`/`cs-resources.cfm` are intentionally *not* disallowed despite being in that same
-  web.config rule — they serve real uploaded documents (PDFs, etc.) that should stay crawlable.
+- Redirect philosophy (from the meals-redirect work): deactivating pages/subsites in the CMS does
+  not fix search-engine indexing — explicit redirects are the correct way to handle visitors
+  arriving from stale search results and links. That's why retired content gets a redirect rule
+  here rather than just being unpublished.
+- **Do not try to replace the ~30 fine-grained per-department `cla.mercer.edu` redirect rules
+  with a catch-all.** It was attempted today and fully reverted (`web.config` restored to its
+  start-of-day state, commit `8f9fc04`). The idea — redirect everything on `cla.mercer.edu` to
+  the `liberalarts.mercer.edu` homepage except `/faculty-staff/`, the one section still served
+  live from that host — fails because the faculty-staff pages load their CSS, images, and other
+  assets from host-root paths (`/style/…`, `/images/…`, etc.). A catch-all 301s every one of
+  those asset requests to the liberalarts homepage, so the page renders unstyled. Making it work
+  would mean allowlisting every asset path the pages touch, which is exactly the complexity the
+  explicit per-path rules already handle. The fine-grained rules stay until
+  `cla.mercer.edu/faculty-staff/` is retired outright, at which point the whole host can get a
+  blanket redirect with no exceptions.
+- Hard-won IIS rewrite facts from the attempt, recorded for whoever touches this file next:
+  - **`{URL}` in conditions includes a leading slash** (`/faculty-staff/`), unlike the
+    `match url` attribute which strips it. A `{URL}` pattern like `^faculty-staff` never matches
+    — silently — turning the condition into dead code. See the existing `^/_cs_apps(/|$)`-style
+    patterns for the correct form.
+  - **The www Site File/Directory URL Fallback rules rewrite without `stopProcessing`**, so later
+    rules may see `{URL}` already rewritten to the internal `(/)www/…` form. Conditions on `{URL}`
+    in later rules must account for both forms.
+  - Requesting a directory path *without* a trailing slash, after it's been rewritten to its
+    `www/` filesystem location, triggers IIS's courtesy trailing-slash 301 against the
+    **rewritten** path — publicly exposing the internal `/www/…` URL. IIS behavior, not
+    CommonSpot.
+  - Verify redirect changes with `curl -sI`, never a browser — browsers cache 301s aggressively,
+    and stale cached redirects from intermediate deploys will mislead you.
+- Mystery solved: `/jakarta` (in the "Stop Processing for In-Site CMS Resources" rule since the
+  first commit, 2017) is the IIS virtual directory for the ColdFusion↔IIS connector. ColdFusion
+  runs on embedded Tomcat, and CF's `wsconfig` tool creates a `jakarta` virtual directory pointing
+  at `isapi_redirect.dll` (the Tomcat ISAPI redirector — named for the old Apache Jakarta
+  Project). Every `.cfm` request passes through it, so **rewrite rules must never touch
+  `/jakarta/…` or ColdFusion page serving breaks**. It's deliberately absent from
+  `robots-allow.txt`'s disallow list — it serves no crawlable content, so a disallow line would
+  be harmless but pointless.
+- `_cs_resources`/`cs-resources.cfm` are intentionally *not* disallowed in `robots-allow.txt`
+  despite appearing in that same web.config rule — `_cs_resources` holds uploaded documents
+  (PDFs, etc.) and `cs-resources.cfm` is the file proxy for accessing them; that content should
+  stay crawlable.
