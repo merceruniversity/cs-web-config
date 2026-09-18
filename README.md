@@ -79,9 +79,36 @@ IIS Manager rather than by hand.**
   responses: it injects a `browser-expire` cookie and drops the empty `Server` and `X-Powered-By`
   headers the blanking rules produce. It passes non-standard headers through untouched, and
   `X-Frame-Options` arrives identical by both routes, so it is not filtering to a known-header
-  allow-list. It has not been proven to pass `Content-Security-Policy` specifically, because
-  nothing here emitted that header before now. If the direct-by-IP checks show it and the VIP check
-  does not, the proxy is stripping it and the problem is not in this file.
+  allow-list. Confirmed on deploy day that it passes `Content-Security-Policy` through unchanged,
+  which had been the one open question, since nothing here emitted that header before.
+- Deployed and verified 2026-09-18. GeneRoddenberry first, then both ROPs. The header is present
+  and appears exactly once on GeneRoddenberry, CaptainKirk and MisterSpock by direct IP, and
+  through the public VIP, with `X-Frame-Options: SAMEORIGIN` unchanged beside it. Verified on a
+  real GET rather than only `HEAD`, since `HEAD` against these servers returns a 26-byte stub
+  instead of the page. The `Is HTML` precondition holds: `robots.txt` comes back as `text/plain`
+  carrying `X-Frame-Options` but no CSP header, which is correct because `frame-ancestors` only
+  applies to documents. Spot-checked across hosts (`reservations`, `staffcouncil`, `campus`, and
+  `cla.mercer.edu/faculty-staff/`), all consistent.
+- Confirmed in a real browser (headless Chrome 153) that the allow-list is enforced, not merely
+  present. Framing `https://reservations.mercer.edu/` from `https://merceredu.lndo.site/` loads.
+  Framing it from `http://127.0.0.1:8899/`, an origin deliberately left off the list, is refused
+  with `net::ERR_BLOCKED_BY_RESPONSE` and Chrome naming this exact directive. So the header
+  discriminates by origin rather than opening framing to everyone.
+- **These hosts are split-horizon DNS, and it breaks framing from a public origin.**
+  `reservations.mercer.edu` resolves to `10.10.16.20` on the Mercer network and to
+  `209.172.236.64` from outside. Chrome's Local Network Access checks refuse to let a page on a
+  **public** origin load a **private** IP, so framing a CommonSpot page from
+  `https://mcp-merceredu.pantheonsite.io/` fails on campus with
+  `net::ERR_BLOCKED_BY_LOCAL_NETWORK_ACCESS_CHECKS` **despite** that origin being allow-listed
+  here. Nothing in this file can fix that; it is not a CSP failure and the CSP header is being
+  honored correctly. Off campus the same page would resolve the public address and the check would
+  not apply, so the tool would work for an outside reviewer and fail for an on-campus one, which is
+  the opposite of what anyone would guess.
+- Consequence for the comparison tool this rule was added for: serve it from the CommonSpot side
+  (a page under `customcf/`) rather than from the WordPress multisite. Then the CommonSpot half is
+  same-origin, and the WordPress half is a public origin loaded from a private one, a direction the
+  Local Network Access checks permit, so it works from both DNS views. Framing from local Lando
+  works today and is fine for one person's own comparison work.
 
 ## Notes (2026-07-10)
 
